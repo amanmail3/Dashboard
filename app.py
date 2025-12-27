@@ -1,5 +1,5 @@
 # =========================================================
-# AI REAL ESTATE COPILOT — STREAMLIT APP (NEON + SPOTLIGHT)
+# AI REAL ESTATE COPILOT — FINAL (PRICE FIX + UNIT TOGGLE)
 # =========================================================
 
 import streamlit as st
@@ -20,7 +20,12 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# GLASSMORPHISM + NEON + ANIMATIONS (GLOBAL CSS)
+# OPENAI CONFIG (USE STREAMLIT SECRETS / ENV VAR)
+# ---------------------------------------------------------
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+
+# ---------------------------------------------------------
+# GLOBAL STYLES (GLASS + NEON)
 # ---------------------------------------------------------
 st.markdown(
     """
@@ -29,87 +34,25 @@ st.markdown(
         background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
         color: white;
     }
-
-    /* ---------- Glass cards ---------- */
     div[data-testid="metric-container"],
-    div[data-testid="stDataFrame"],
-    div[data-testid="stPlotlyChart"] {
+    div[data-testid="stPlotlyChart"],
+    div[data-testid="stDataFrame"] {
         background: rgba(255,255,255,0.08);
         backdrop-filter: blur(14px);
         border-radius: 16px;
         border: 1px solid rgba(255,255,255,0.15);
-        box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+        box-shadow: 0 0 25px rgba(0,198,255,0.4);
         padding: 16px;
         margin-bottom: 16px;
-        animation: fadeIn 0.6s ease-in;
         transition: all 0.4s ease;
     }
-
-    /* ---------- 🌈 Neon hover effect (charts) ---------- */
     div[data-testid="stPlotlyChart"]:hover {
-        box-shadow:
-            0 0 15px rgba(0,198,255,0.6),
-            0 0 30px rgba(0,114,255,0.5),
-            0 0 60px rgba(0,114,255,0.4);
+        box-shadow: 0 0 40px rgba(0,198,255,0.8);
         transform: scale(1.01);
-    }
-
-    /* ---------- Sidebar ---------- */
-    section[data-testid="stSidebar"] {
-        background: rgba(15,32,39,0.9);
-        backdrop-filter: blur(12px);
-        border-right: 1px solid rgba(255,255,255,0.1);
-    }
-
-    /* ---------- Buttons ---------- */
-    button[kind="primary"] {
-        background: linear-gradient(135deg, #00c6ff, #0072ff);
-        color: white;
-        border-radius: 12px;
-        font-weight: 600;
-        transition: all 0.3s ease;
-    }
-
-    button[kind="primary"]:hover {
-        transform: scale(1.07);
-        box-shadow: 0 0 25px rgba(0,198,255,0.8);
-    }
-
-    /* ---------- Spotlight overlay ---------- */
-    .spotlight {
-        position: fixed;
-        inset: 0;
-        background: rgba(0,0,0,0.65);
-        z-index: 999;
-        animation: fadeIn 0.4s ease-in;
-    }
-
-    .spotlight-box {
-        position: relative;
-        z-index: 1000;
-        box-shadow:
-            0 0 25px rgba(0,255,200,0.8),
-            0 0 60px rgba(0,255,200,0.5);
-        border-radius: 18px;
-        padding: 12px;
-        background: rgba(255,255,255,0.08);
-        backdrop-filter: blur(14px);
-    }
-
-    @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(10px); }
-        to { opacity: 1; transform: translateY(0); }
     }
     </style>
     """,
     unsafe_allow_html=True
-)
-
-# ---------------------------------------------------------
-# OPENAI CONFIG (PASTE KEY HERE)
-# ---------------------------------------------------------
-client = OpenAI(
-    api_key="OPENAI_API_KEY"
 )
 
 # ---------------------------------------------------------
@@ -122,54 +65,73 @@ def load_data():
 df = load_data()
 
 # ---------------------------------------------------------
+# PRICE CLEANING (CRITICAL FIX)
+# ---------------------------------------------------------
+def parse_price(price):
+    if pd.isna(price):
+        return np.nan
+
+    price = str(price).replace(",", "").replace("₹", "").lower().strip()
+
+    try:
+        if "cr" in price:
+            return float(re.findall(r"\d+\.?\d*", price)[0]) * 1e7
+        if "l" in price:
+            return float(re.findall(r"\d+\.?\d*", price)[0]) * 1e5
+        return float(re.findall(r"\d+\.?\d*", price)[0])
+    except:
+        return np.nan
+
+df["Price_num"] = df["Price"].apply(parse_price)
+df = df.dropna(subset=["Price_num"])
+
+# ---------------------------------------------------------
+# PRETTY PRICE FORMATTER
+# ---------------------------------------------------------
+def format_price(value, unit):
+    if unit == "Cr":
+        return f"₹{value/1e7:.2f} Cr"
+    else:
+        return f"₹{value/1e5:.1f} L"
+
+# ---------------------------------------------------------
 # FEATURE ENGINEERING
 # ---------------------------------------------------------
 def extract_bhk(text):
-    match = re.search(r"(\\d+)\\s*BHK", str(text))
+    match = re.search(r"(\d+)\s*BHK", str(text))
     return int(match.group(1)) if match else np.nan
 
-def infer_property_type(text):
-    text = str(text).lower()
-    return "House" if ("villa" in text or "house" in text) else "Flat"
-
 df["BHK"] = df["Property Title"].apply(extract_bhk)
-df["Property_Type"] = df["Property Title"].apply(infer_property_type)
 
 # ---------------------------------------------------------
-# SIDEBAR — DEMO MODE + FILTERS
+# SIDEBAR CONTROLS
 # ---------------------------------------------------------
-st.sidebar.title("🚀 Demo Controls")
-demo_mode = st.sidebar.toggle("One-Click Demo Mode")
+st.sidebar.title("⚙️ Controls")
 
-st.sidebar.markdown("---")
-st.sidebar.title("🔍 Filters")
+price_unit = st.sidebar.radio("💰 Price Unit", ["Cr", "L"], horizontal=True)
 
-if demo_mode:
-    locations = df["Location"].value_counts().head(2).index.tolist()
-    price_range = (
-        int(df["Price"].quantile(0.25)),
-        int(df["Price"].quantile(0.75))
-    )
-else:
-    locations = st.sidebar.multiselect(
-        "Location",
-        df["Location"].unique(),
-        df["Location"].unique()
-    )
+locations = st.sidebar.multiselect(
+    "📍 Location",
+    sorted(df["Location"].unique()),
+    sorted(df["Location"].unique())
+)
 
-    price_range = st.sidebar.slider(
-        "Price Range",
-        int(df["Price"].min()),
-        int(df["Price"].max()),
-        (int(df["Price"].min()), int(df["Price"].max()))
+price_range = st.sidebar.slider(
+    "Price Range",
+    int(df["Price_num"].min()),
+    int(df["Price_num"].max()),
+    (
+        int(df["Price_num"].min()),
+        int(df["Price_num"].max())
     )
+)
 
 # ---------------------------------------------------------
-# APPLY FILTERS
+# FILTER DATA
 # ---------------------------------------------------------
 filtered_df = df[
     (df["Location"].isin(locations)) &
-    (df["Price"].between(price_range[0], price_range[1]))
+    (df["Price_num"].between(price_range[0], price_range[1]))
 ]
 
 # ---------------------------------------------------------
@@ -177,36 +139,40 @@ filtered_df = df[
 # ---------------------------------------------------------
 st.title("🏙️ AI Real Estate Copilot")
 
-if demo_mode:
-    st.markdown("<div class='spotlight'></div>", unsafe_allow_html=True)
-    st.markdown(
-        "<div class='spotlight-box'>🎯 Spotlight Mode: Key insights highlighted</div>",
-        unsafe_allow_html=True
-    )
-
 # ---------------------------------------------------------
-# KPIs
+# KPI METRICS
 # ---------------------------------------------------------
 c1, c2, c3, c4 = st.columns(4)
+
 c1.metric("Listings", len(filtered_df))
-c2.metric("Avg Price", f"₹ {int(filtered_df['Price'].mean()):,}")
-c3.metric("Avg Area", f"{int(filtered_df['Total_Area'].mean())} sqft")
-c4.metric("₹ / Sqft", f"₹ {int(filtered_df['Price_per_SQFT'].mean())}")
+c2.metric(
+    "Avg Price",
+    format_price(filtered_df["Price_num"].mean(), price_unit)
+)
+c3.metric(
+    "Max Price",
+    format_price(filtered_df["Price_num"].max(), price_unit)
+)
+c4.metric(
+    "Avg ₹ / Sqft",
+    f"₹{int(filtered_df['Price_per_SQFT'].mean()):,}"
+)
 
 st.divider()
 
 # ---------------------------------------------------------
-# PRICE vs AREA (NEON HOVER)
+# PRICE vs AREA CHART
 # ---------------------------------------------------------
 st.subheader("📊 Price vs Area")
 
 fig = px.scatter(
     filtered_df,
     x="Total_Area",
-    y="Price",
+    y="Price_num",
     color="Location",
     size="Price_per_SQFT",
     hover_name="Property Title",
+    labels={"Price_num": "Price (INR)"},
     template="plotly_dark"
 )
 fig.update_layout(transition_duration=500)
@@ -217,8 +183,8 @@ st.plotly_chart(fig, use_container_width=True)
 # ---------------------------------------------------------
 @st.cache_data
 def narrate_chart(df):
-    summary = df[["Total_Area", "Price", "Price_per_SQFT"]].describe().to_string()
-    prompt = f"Explain key insights from this chart:\n{summary}"
+    summary = df[["Total_Area", "Price_num", "Price_per_SQFT"]].describe().to_string()
+    prompt = f"Explain this real estate price vs area chart:\n{summary}"
     res = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
@@ -226,17 +192,51 @@ def narrate_chart(df):
     )
     return res.choices[0].message.content
 
-with st.expander("🧠 Auto Chart Narration"):
+with st.expander("🧠 Auto Chart Explanation"):
     st.markdown(narrate_chart(filtered_df))
 
 # ---------------------------------------------------------
-# DATA TABLE
+# DATA TABLE (WITH PRETTY PRICE)
+# ---------------------------------------------------------
+st.subheader("📋 Property Explorer")
+
+table_df = filtered_df.copy()
+table_df["Pretty Price"] = table_df["Price_num"].apply(
+    lambda x: format_price(x, price_unit)
+)
+
+st.dataframe(
+    table_df[[
+        "Property Title",
+        "Location",
+        "Pretty Price",
+        "Total_Area",
+        "Price_per_SQFT",
+        "Baths",
+        "Balcony"
+    ]],
+    use_container_width=True
+)
+
+# ---------------------------------------------------------
+# CHAT WITH YOUR DATA
 # ---------------------------------------------------------
 st.divider()
-st.subheader("📋 Property Explorer")
-st.dataframe(filtered_df, use_container_width=True)
+st.subheader("💬 Chat with your data")
+
+question = st.text_input("Ask a question about the current selection")
+
+if st.button("Ask AI"):
+    summary = filtered_df.describe(include="all").to_string()
+    prompt = f"Answer using this dataset summary:\n{summary}\nQuestion: {question}"
+    res = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=200
+    )
+    st.success(res.choices[0].message.content)
 
 # ---------------------------------------------------------
 # FOOTER
 # ---------------------------------------------------------
-st.caption("AI Real Estate Copilot • Neon UI • Spotlight Demo Mode")
+st.caption("AI Real Estate Copilot • Streamlit Cloud • Production Ready")
